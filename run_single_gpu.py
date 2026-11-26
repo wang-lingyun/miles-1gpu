@@ -177,11 +177,12 @@ def build_argv(
     return argv + list(extra or [])
 
 
-def train_env() -> dict[str, str]:
-    """Environment for the Ray job (train.py and everything it spawns)."""
+def train_env(wandb: bool = False) -> dict[str, str]:
+    """Environment for the Ray job (train.py and everything it spawns). The W&B key is not in here: Ray workers
+    inherit it from the launcher's environment, which keeps it out of the job's recorded runtime env."""
     return {
         "PYTHONUNBUFFERED": "1",
-        "WANDB_MODE": "disabled",
+        **({} if wandb else {"WANDB_MODE": "disabled"}),
         "RAY_USAGE_STATS_ENABLED": "0",
         "NCCL_NVLS_ENABLE": "0",
         "CUDA_DEVICE_MAX_CONNECTIONS": "1",
@@ -215,10 +216,15 @@ def main() -> None:
     # Deferred: only importable inside the Miles image.
     from miles.utils.external_utils import command_utils as U
 
-    for key in ("WANDB_API_KEY", "MILES_SCRIPT_EXTERNAL_RAY"):
+    wandb = "--use-wandb" in argv
+    for key in ("MILES_SCRIPT_EXTERNAL_RAY", *(() if wandb else ("WANDB_API_KEY",))):
         os.environ.pop(key, None)
+    if wandb:
+        assert os.environ.get("WANDB_API_KEY"), "--use-wandb needs WANDB_API_KEY in the environment"
+        if os.environ.get("WANDB_MODE") == "disabled":
+            del os.environ["WANDB_MODE"]
     os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
-    os.environ.update(train_env())
+    os.environ.update(train_env(wandb))
 
     config = U.ExecuteTrainConfig(output_dir=str(args.run_dir), num_nodes=1, graceful_ray_stop=True)
     config.create_backend().execute_train(
@@ -227,7 +233,7 @@ def main() -> None:
         megatron_model_type=CONFIG["megatron_model_type"],
         megatron_path="/root/Megatron-LM",
         job_lifetime="launcher",
-        extra_env_vars=train_env(),
+        extra_env_vars=train_env(wandb),
     )
 
 

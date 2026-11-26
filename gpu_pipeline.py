@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import runpy
 import shlex
 import shutil
@@ -43,12 +44,36 @@ def model_args() -> list[str]:
     return shlex.split(runpy.run_path(str(script))["model_args"]())
 
 
-def stage_env() -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if k not in ("WANDB_API_KEY", "MILES_SCRIPT_EXTERNAL_RAY")}
+def wandb_enabled() -> bool:
+    """W&B is on when the container was started with the key file (scripts/run_5090.sh sets MILES_WANDB=1)."""
+    return os.environ.get("MILES_WANDB") == "1" and bool(os.environ.get("WANDB_API_KEY"))
+
+
+def wandb_args(run_id: str, run_dir: Path) -> list[str]:
+    """Miles' W&B flags. Online "shared" mode, because the driver, trainer and rollout executor all log into one
+    run. The key itself stays in the environment and never goes on a command line (Miles prints its argv)."""
+    if not wandb_enabled():
+        return []
+    flags = ["--use-wandb", "--wandb-mode", "online",
+             "--wandb-project", os.environ.get("WANDB_PROJECT") or CONFIG["wandb"]["project"],
+             "--wandb-group", run_id, "--disable-wandb-random-suffix",  # Miles names the run after the group
+             "--wandb-dir", str(run_dir)]
+    if entity := os.environ.get("WANDB_ENTITY"):
+        flags += ["--wandb-team", entity]
+    return flags
+
+
+def stage_env(wandb: bool = False) -> dict[str, str]:
+    """Environment for a stage. Only a W&B-enabled training stage keeps WANDB_API_KEY."""
+    drop = {"MILES_SCRIPT_EXTERNAL_RAY"} | (set() if wandb else {"WANDB_API_KEY"})
+    env = {k: v for k, v in os.environ.items() if k not in drop}
+    if wandb:
+        env.pop("WANDB_MODE", None)
+    else:
+        env["WANDB_MODE"] = "disabled"
     env.update(
         PYTHONPATH=os.pathsep.join([str(ROOT), str(MILES), str(MEGATRON)]),
         PYTHONUNBUFFERED="1",
-        WANDB_MODE="disabled",
         RAY_USAGE_STATS_ENABLED="0",
         NCCL_NVLS_ENABLE="0",
         CUDA_DEVICE_MAX_CONNECTIONS="1",
@@ -88,6 +113,7 @@ def run_stage(
     timeout_s: float | None,
     commit: Callable[[], None],
     commit_every_s: float = 30.0,
+    env: dict[str, str] | None = None,
 ) -> None:
     """Run cmd in its own process group, tee its output, kill the group on timeout, raise on failure."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -95,7 +121,7 @@ def run_stage(
     with open(log_path, "a", buffering=1) as log:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-            env=stage_env(), start_new_session=True,
+            env=env if env is not None else stage_env(), start_new_session=True,
         )
 
         def pump() -> None:
@@ -180,6 +206,9 @@ def run(
     shutil.copy(data_root / CONFIG["eval_subset"]["dest"], run_dir / CONFIG["eval_subset"]["dest"])
 
     drop = list(drop or [])
+    # W&B flags first, so flags passed after `--` can still override them
+    extra_train_args = wandb_args(run_id, run_dir) + list(extra_train_args or [])
+    use_wandb = "--use-wandb" in extra_train_args
     train_argv = build_argv(recipe, profile, data_root=data_root, run_dir=run_dir, conversion_dir=conv_dir,
                             drop=drop, extra=extra_train_args)
     base = {"run_id": run_id, "recipe": recipe, "profile": profile, "conversion_dir": str(conv_dir),
@@ -198,11 +227,11 @@ def run(
             raise StageFailed(f"overall deadline of {limits['overall']} s reached before {stage}")
         return min(limits[stage], remaining)
 
-    def stage(name: str, cmd: list[str]) -> None:
+    def stage(name: str, cmd: list[str], env: dict[str, str] | None = None) -> None:
         started = time.monotonic()
         status.stage(name, state="running", log=f"logs/{name}.log")
         try:
-            run_stage(name, cmd, run_dir / "logs" / f"{name}.log", budget(name), commit)
+            run_stage(name, cmd, run_dir / "logs" / f"{name}.log", budget(name), commit, env=env)
         except BaseException as exc:
             status.stage(name, state="failed", error=str(exc), elapsed_s=round(time.monotonic() - started, 1))
             raise
@@ -222,13 +251,18 @@ def run(
                     "--hf-checkpoint", str(model_dir), "--save", str(conv_dir),
                 ])
                 (conv_dir / DONE_MARKER).write_text(json.dumps({"run_id": run_id, "pins": CONFIG["pins"]}) + "\n")
-        if "training" in stages:
-            stage("training", [
-                sys.executable, str(ROOT / "run_single_gpu.py"), "--recipe", recipe, "--profile", profile,
-                "--data-root", str(data_root), "--run-dir", str(run_dir), "--conversion-dir", str(conv_dir),
-                "--drop", ",".join(drop), "--", *(extra_train_args or []),
-            ])
         result = {}
+        if "training" in stages:
+            try:
+                stage("training", [
+                    sys.executable, str(ROOT / "run_single_gpu.py"), "--recipe", recipe, "--profile", profile,
+                    "--data-root", str(data_root), "--run-dir", str(run_dir), "--conversion-dir", str(conv_dir),
+                    "--drop", ",".join(drop), "--", *extra_train_args,
+                ], env=stage_env(wandb=use_wandb))
+            finally:
+                if url := wandb_url(run_dir / "logs" / "training.log"):
+                    result["wandb_url"] = url
+                    status.stage("training", wandb_url=url)
         if "hf_export" in stages:
             stage("hf_export", [
                 sys.executable, str(ROOT / "checkpoint_compat.py"), "--checkpoints", str(run_dir / "checkpoints"),
@@ -246,6 +280,14 @@ def run(
     finally:
         if monitor is not None:
             monitor.terminate()
+
+
+def wandb_url(log: Path) -> str | None:
+    if not log.exists():
+        return None
+    # the host depends on the account (wandb.ai, forge.coreweave.com/wandb, self-hosted); the wording doesn't
+    m = re.search(r"View run at (https://\S+?/runs/[\w-]+)", log.read_text(errors="replace"))
+    return m.group(1) if m else None
 
 
 def image_tag() -> str:

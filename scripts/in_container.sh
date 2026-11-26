@@ -5,7 +5,8 @@ set -uo pipefail
 
 export PYTHONPATH="/opt/experiment:/root/miles:/root/Megatron-LM${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
-export WANDB_MODE=disabled RAY_USAGE_STATS_ENABLED=0 NCCL_NVLS_ENABLE=0
+export RAY_USAGE_STATS_ENABLED=0 NCCL_NVLS_ENABLE=0
+if [ "${MILES_WANDB:-0}" = 1 ]; then unset WANDB_MODE; else export WANDB_MODE=disabled; unset WANDB_API_KEY; fi
 export TRITON_CACHE_DIR=/root/.cache/triton
 
 give_back() {

@@ -29,11 +29,12 @@ probe_attention.py         sm_120 check: Megatron/TE attention backends on packe
 scripts/check_gradients.sh whole-model gradient check: replay identical rollouts through 3 attention paths
 modal_miles.py             Modal app: download() on CPU, train(run_id) on one H100, same image and pipeline
 scripts/host/install_docker.sh   one-time sudo: Docker Engine + NVIDIA Container Toolkit on the box
+scripts/host/guard_docker_bridge.sh  one-time sudo: only root may open connections into Docker bridge networks (for W&B runs)
 scripts/miles_docker.sh    run any command in the pinned image (repo at /opt/experiment, data at /data)
 scripts/in_container.sh    container entry: shared env, run, chown /data back to your user
 scripts/run_5090.sh        the local experiment: assets (once), then the pipeline in a network-less container
 scripts/sync.sh            rsync code Mac -> box, logs box -> Mac
-tests/                     CPU tests: recipe/profile argv, stage runner (logs, exit codes, timeouts), checkpoint view
+tests/                     CPU tests: recipe/profile argv, stage runner (logs, exit codes, timeouts), checkpoint view, W&B wiring
 ```
 
 ## RTX 5090
@@ -101,9 +102,43 @@ Three steps with 8 samples each show that the plumbing works, not that the model
 cap, so for real runs raise `--rollout-max-response-len` (and `--sglang-context-length` / `--max-tokens-per-gpu`
 with it) or train on easier prompts. About 4.7 GB of GPU memory is still free at peak.
 
-The training container runs with `--network none`. Ray, the SGLang servers and the router listen without
-authentication, and another account logs in to this box, so nothing outside the container should reach them. Only
-the asset download gets a network.
+Without W&B, the training container runs with `--network none`, and Ray, the SGLang servers and the router listen
+on loopback only. They have no authentication, and another account logs in to this box. With W&B on, the container
+needs a network; see [Weights & Biases](#weights--biases) for what that exposes and the guard against it.
+
+## Weights & Biases
+
+On when `~/.config/miles-1gpu/wandb.env` exists on the box (`WANDB=0` turns it off for a run). Create the file
+without putting the key in your shell history:
+
+```bash
+mkdir -p ~/.config/miles-1gpu && (umask 077 && read -rs -p "W&B API key: " k && printf 'WANDB_API_KEY=%s\n' "$k" > ~/.config/miles-1gpu/wandb.env); echo
+```
+
+Optional lines in the same file: `WANDB_ENTITY=<team>` (default: the key's default entity) and
+`WANDB_PROJECT=<name>` (default: `miles-1gpu`). The run is named after `RUN_ID`, its files stay in
+`data/runs/<id>/wandb/`, and its URL is recorded in `status.json`. Keys for CoreWeave's W&B
+(`forge.coreweave.com`) work as is; the client picks the right API host from the key.
+
+How the key is handled: `docker run --env-file`, so it never appears on a command line. Only the training stage's
+environment gets it, never conversion or export. Ray workers inherit it from the launcher rather than from the Ray
+job's runtime env. It never appears in train.py's argv: Miles' own launchers pass `--wandb-key`, which Miles prints.
+`tests/test_wandb.py` checks all of this. A real run (`wandb-test1`) had 0 files containing the key value.
+
+Miles logs into one W&B run from three processes (driver, rollout executor, trainer) in W&B's online "shared"
+mode, so offline-then-upload isn't an option, and a W&B run gets the default Docker bridge network instead of
+none. Measured during `wandb-test1`: 67 of 70 listening sockets were no longer loopback-only, including Ray's GCS
+(`:6379`), Ray's client server (`:10001`, which runs code as root in the container, where `/data` and the key are)
+and SGLang. Docker doesn't route the LAN to the container, but every local account can reach it. That's fine when
+everyone with an account on the box is trusted, as on this one. On a box shared with untrusted accounts, install
+the guard once. It lets only root open TCP connections into `172.16.0.0/12`; container uploads and `docker exec`
+are unaffected:
+
+```bash
+ssh -t gpu5090-lan 'sudo bash ~/src/miles/scripts/host/guard_docker_bridge.sh'    # --remove to undo
+```
+
+The Modal path keeps W&B off (the handoff requires it); it would need a Modal Secret.
 
 ## Why the 5090 needs a profile
 

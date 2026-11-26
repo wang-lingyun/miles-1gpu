@@ -23,7 +23,7 @@ run() {  # run <name> <profile> <drop> <extra train.py flags...>
   local name=$1 profile=$2 drop=$3
   shift 3
   echo "$(date +%T) $name"
-  RUN_ID="$TAG-$name" PROFILE="$profile" RECIPE=gsm8k scripts/run_5090.sh --stages training --no-timeouts \
+  WANDB=0 RUN_ID="$TAG-$name" PROFILE="$profile" RECIPE=gsm8k scripts/run_5090.sh --stages training --no-timeouts \
     --drop "$drop" -- "$@" > "data/logs/$TAG-$name.out" 2>&1
   RC[$name]=$?
   echo "$(date +%T) $name exit ${RC[$name]}"

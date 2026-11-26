@@ -40,6 +40,7 @@
   },
   "eval_subset": {"source": "eval_data", "file": "aime-2024.jsonl", "indices": [0, 1], "dest": "eval-subset.jsonl"},
   "manifest": "assets-manifest.json",
+  "wandb": {"project": "miles-1gpu", "key_file_on_box": "~/.config/miles-1gpu/wandb.env"},
   "megatron_model_type": "qwen3-0.6B",
   "stage_timeouts_s": {"conversion": 900, "training": 3600, "hf_export": 900, "overall": 5100},
   "platforms": {
