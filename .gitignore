@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Data, runs, checkpoints, caches (on the box: data/ is mounted at /data in the container)
+data/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

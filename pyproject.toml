@@ -1,0 +1,19 @@
+[project]
+name = "miles-1gpu"
+version = "0.1.0"
+description = "Miles (Megatron + SGLang) GRPO on one GPU: RTX 5090 via Docker, H100 via Modal, one pipeline"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+# Nothing to install for the GPU side: it runs in the pinned Miles image. The Mac only needs these groups.
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8"]
+# The Modal CLI/SDK, isolated and pinned (1.4.x is unsuitable for the workspace image builder)
+modal = ["modal==1.6.4", "synchronicity==0.12.7"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

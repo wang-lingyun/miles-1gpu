@@ -1,0 +1,66 @@
+{
+  "pins": {
+    "miles_commit": "fe7037f561910f26ac4eccf9082bc5f4410488f8",
+    "image": "radixark/miles@sha256:bab7c3a516f34ddb430d820087259822d438e9f74594614d61e98bb645627d00",
+    "megatron_commit": "8e43d38528aac22fef29d30db7a709041bf257cc",
+    "image_python": "/opt/sglang/bin/python",
+    "downloader": {"python": "3.12", "huggingface_hub": "0.36.0"},
+    "modal": {"modal": "1.6.4", "synchronicity": "0.12.7"}
+  },
+  "assets": {
+    "model": {
+      "repo_id": "Qwen/Qwen3-0.6B",
+      "repo_type": "model",
+      "revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+      "dest": "models/Qwen3-0.6B",
+      "files": ["LICENSE", "README.md", "config.json", "generation_config.json", "merges.txt", "model.safetensors",
+                "tokenizer.json", "tokenizer_config.json", "vocab.json"]
+    },
+    "train_data": {
+      "repo_id": "zhuzilin/dapo-math-17k",
+      "repo_type": "dataset",
+      "revision": "2e65612930298bde4c5d58fd97b3f23a483aaff9",
+      "dest": "datasets/dapo-math-17k",
+      "files": ["dapo-math-17k.jsonl"]
+    },
+    "gsm8k": {
+      "repo_id": "zhuzilin/gsm8k",
+      "repo_type": "dataset",
+      "revision": "0cbd9f31d91ac21a7613dcbc7fef992adac459ae",
+      "dest": "datasets/gsm8k",
+      "files": ["train.parquet", "test.parquet"]
+    },
+    "eval_data": {
+      "repo_id": "zhuzilin/aime-2024",
+      "repo_type": "dataset",
+      "revision": "1c625e328db94ec7ef7ff169016b097c468d60b9",
+      "dest": "datasets/aime-2024",
+      "files": ["aime-2024.jsonl"]
+    }
+  },
+  "eval_subset": {"source": "eval_data", "file": "aime-2024.jsonl", "indices": [0, 1], "dest": "eval-subset.jsonl"},
+  "manifest": "assets-manifest.json",
+  "megatron_model_type": "qwen3-0.6B",
+  "stage_timeouts_s": {"conversion": 900, "training": 3600, "hf_export": 900, "overall": 5100},
+  "platforms": {
+    "rtx5090": {
+      "profile": "rtx5090",
+      "recipe": "dapo-smoke",
+      "data_root": "/data",
+      "reuse_existing_conversion": true
+    },
+    "modal": {
+      "profile": "h100",
+      "recipe": "dapo-smoke",
+      "data_root": "/data",
+      "reuse_existing_conversion": false,
+      "workspace": null,
+      "environment": "main",
+      "volume": "miles-qwen3-smoke-v2",
+      "download": {"cpu": [2, 2], "memory_mib": [32768, 32768], "ephemeral_disk_mib": 524288,
+                   "timeout_s": 1800, "startup_timeout_s": 600},
+      "train": {"gpu": "H100!", "cpu": [8, 8], "memory_mib": [65536, 65536], "ephemeral_disk_mib": 524288,
+                "timeout_s": 5400, "startup_timeout_s": 600}
+    }
+  }
+}
