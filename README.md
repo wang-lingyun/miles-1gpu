@@ -100,7 +100,10 @@ steps, eval, save), HF export 18 s. Peak GPU memory 27.8 of 32.6 GB, mean utiliz
 
 Three steps with 8 samples each show that the plumbing works, not that the model learns. Most responses hit the 8k
 cap, so for real runs raise `--rollout-max-response-len` (and `--sglang-context-length` / `--max-tokens-per-gpu`
-with it) or train on easier prompts. About 4.7 GB of GPU memory is still free at peak.
+with it) or train on easier prompts. Memory headroom depends on the batch: this 8-sample smoke run peaked at
+27.8 GB, but `gsm8k` (256 samples per rollout) peaks at 31.9 of 32.6 GB during generation. SGLang grows well past
+its static pool while hundreds of requests run, so check `logs/gpu.csv` (sampled every second) before raising
+lengths.
 
 Without W&B, the training container runs with `--network none`, and Ray, the SGLang servers and the router listen
 on loopback only. They have no authentication, and another account logs in to this box. With W&B on, the container
@@ -215,6 +218,41 @@ RECIPE=gsm8k RUN_ID=gsm8k-1 setsid nohup scripts/run_5090.sh --no-timeouts > dat
 
 Watch `train/train_rollout_logprob_abs_diff` in the training log: it compares SGLang's sampling logprobs with the
 trainer's recomputed ones, so a wrong kernel on either side shows up there.
+
+## Experiment: sync vs fully async on one GPU (`sva1`, 2026-11-26)
+
+`scripts/run_sync_vs_async.sh` runs the `gsm8k` recipe (Miles CI's Qwen3-0.6B bar: `eval/gsm8k >= 0.71` within 60
+rollouts, plus the `--ci-test` invariants) as `sync` (`train.py`) and `async` (`gsm8k-async`:
+`train_async.py --fully-async --colocate`, the only async mode Miles runs on one GPU). Everything else is
+identical. Two seeds per arm (`--seed 1234/1235 --rollout-seed 42/43`), arms alternating, W&B on, GPU memory sampled
+every second. `scripts/summarize_runs.py` builds the table from Miles' own log lines.
+
+| run | CI | base | @20 | @40 | @60 | s/step | train min | staleness avg (max) | logprob diff | GPU peak |
+|---|---|---|---|---|---|---|---|---|---|---|
+| sync-s1 | pass | 0.638 | 0.697 | 0.719 | 0.749 | 36.3 | 35.7 | - | 0.0142 | 31.3 GiB |
+| async-s1 | pass | 0.626 | 0.715 | 0.731 | 0.745 | 28.8 | 28.3 | 0.68 (2) | 0.0138 | 30.7 GiB |
+| sync-s2 | pass | 0.618 | 0.707 | 0.727 | 0.738 | 35.0 | 34.4 | - | 0.0140 | 31.3 GiB |
+| async-s2 | pass | 0.641 | 0.707 | 0.712 | 0.751 | 27.6 | 27.1 | 0.73 (2) | 0.0140 | 30.8 GiB |
+| **sync mean** | 2/2 | 0.628 | 0.702 | 0.723 | **0.743** | **35.6** | 35.0 | | 0.0141 | |
+| **async mean** | 2/2 | 0.634 | 0.711 | 0.721 | **0.748** | **28.2** | 27.7 | | 0.0139 | |
+
+- **Both pass Miles CI's bar.** All four runs did; async-s1 crossed 0.71 at the first eval (rollout 20).
+- **Accuracy per step: no detectable difference.** Final 0.743 vs 0.748, and gain over each run's own base +11.6
+  vs +11.4 points. The untrained model's eval alone varies with sd ≈ 1.2 points across seven measurements (0.618 to
+  0.650, greedy, but long bf16 decodes aren't bit-exact), so two seeds can't resolve differences of a point or so.
+- **Async is 21% faster per step** (28.2 vs 35.6 s; 27.7 vs 35.0 min for 60 steps). On one GPU the two still
+  take turns, so this comes from not waiting for the slowest trajectories of each batch: in-flight generation
+  carries over across steps. That costs staleness of 0.7 versions on average, 2 at most, with no visible effect
+  on trainer-vs-sampler agreement (logprob diff 0.014 in both) and slightly less memory at peak.
+- Not covered: more seeds or steps, bounded staleness (`ARMS=async-s1` adds
+  `--max-weight-staleness 1 --async-submit-within-staleness`), and Miles' own async CI pair
+  (`long/test_qwen2.5_0.5B_gsm8k{,_async}.py`, which needs 2 GPUs).
+
+W&B: [sync-s1](https://forge.coreweave.com/wandb/wang-lingyun-stillwater-lab/miles-1gpu/runs/ct38lkhz),
+[async-s1](https://forge.coreweave.com/wandb/wang-lingyun-stillwater-lab/miles-1gpu/runs/kqxoojrl),
+[sync-s2](https://forge.coreweave.com/wandb/wang-lingyun-stillwater-lab/miles-1gpu/runs/sgubkop7),
+[async-s2](https://forge.coreweave.com/wandb/wang-lingyun-stillwater-lab/miles-1gpu/runs/ydcyl6rs)
+(the project is private to the team).
 
 ## Modal (not run yet)
 

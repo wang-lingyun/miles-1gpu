@@ -217,7 +217,7 @@ def run(
         {**base, "pins": CONFIG["pins"], "stages": list(stages), "train_argv": train_argv,
          "drop": drop, "extra_train_args": extra_train_args or []}, indent=2) + "\n")
     status = Status(run_dir / "status.json", base, commit)
-    monitor = gpu_monitor(run_dir / "logs" / "gpu.csv") if gpu_log else None
+    monitor = gpu_monitor(run_dir / "logs" / "gpu.csv", interval_s=1) if gpu_log else None
 
     def budget(stage: str) -> float | None:
         if not timeouts:
@@ -305,7 +305,7 @@ def main() -> None:
     ap.add_argument("--fresh-conversion", action="store_true", help="always convert into a new directory")
     ap.add_argument("--stages", default=",".join(STAGES), help=f"comma-separated subset of {','.join(STAGES)}")
     ap.add_argument("--no-timeouts", action="store_true", help="for long local runs")
-    ap.add_argument("--gpu-log", action="store_true", help="sample nvidia-smi into logs/gpu.csv every 5 s")
+    ap.add_argument("--gpu-log", action="store_true", help="sample nvidia-smi into logs/gpu.csv every second")
     ap.add_argument("extra", nargs="*", help="extra train.py flags (after --)")
     args = ap.parse_args()
     stages = tuple(s for s in args.stages.split(",") if s)

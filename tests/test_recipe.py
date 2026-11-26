@@ -96,6 +96,15 @@ def test_gsm8k_matches_miles_ci_recipe():
     assert "--skip-eval-before-train" not in a  # base-model eval at rollout 0 is the start of the curve
 
 
+def test_async_recipe_is_gsm8k_plus_fully_async():
+    from run_single_gpu import train_script
+    sync, asyn = as_dict(argv_for("rtx5090", recipe="gsm8k")), as_dict(argv_for("rtx5090", recipe="gsm8k-async"))
+    assert set(asyn) - set(sync) == {"--fully-async"}
+    assert all(asyn[f] == sync[f] for f in sync)  # same data, batch, optimizer, eval and pass bar
+    assert train_script(argv_for("rtx5090", recipe="gsm8k-async")) == "train_async.py"
+    assert train_script(argv_for("rtx5090", recipe="gsm8k")) == "train.py"
+
+
 def test_drop_removes_flags_and_rejects_unknown():
     a = as_dict(argv_for("rtx5090", recipe="gsm8k", drop=["eval-interval", "--save", "ci-test"]))
     assert not {"--eval-interval", "--save", "--ci-test"} & set(a)

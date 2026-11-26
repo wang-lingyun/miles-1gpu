@@ -8,6 +8,7 @@ Recipes
   dapo-smoke   the Modal handoff: official Megatron GRPO/deepscaler recipe sized to 3 steps on one GPU
   gsm8k        Miles CI's Qwen3-0.6B baseline (tests/e2e/short/test_qwen3_0.6B_fsdp_colocated_2xGPU.py) with the
                Megatron trainer on one GPU, including its pass bar: eval/gsm8k >= 0.71 within 60 rollouts
+  gsm8k-async  the same, fully async (train_async.py --fully-async --colocate)
 Profiles
   h100         nothing changed
   rtx5090      sm_120 attention fix (see sm120.py)
@@ -132,6 +133,10 @@ RECIPES: dict[str, dict[str, list[str]]] = {
         "--ci-metric-checker-threshold": ["0.71"],
     },
 }
+# Fully async on one GPU: Miles' only async mode that colocates (train_async.py --fully-async --colocate). The engines
+# keep generating between training steps and the trainer drains finished groups from a buffer; generation pauses
+# while the trainer runs. Same data, batch, optimizer, eval and pass bar as "gsm8k".
+RECIPES["gsm8k-async"] = {**RECIPES["gsm8k"], "--fully-async": []}
 
 # Per-GPU overrides on top of COMMON + recipe. Keep each one justified.
 PROFILES: dict[str, dict[str, list[str]]] = {
@@ -191,6 +196,11 @@ def train_env(wandb: bool = False) -> dict[str, str]:
     }
 
 
+def train_script(argv: list[str]) -> str:
+    """train.py alternates rollout and training; --fully-async runs through train_async.py."""
+    return "train_async.py" if "--fully-async" in argv else "train.py"
+
+
 def split_csv(text: str) -> list[str]:
     return [x for x in text.split(",") if x]
 
@@ -229,6 +239,7 @@ def main() -> None:
     config = U.ExecuteTrainConfig(output_dir=str(args.run_dir), num_nodes=1, graceful_ray_stop=True)
     config.create_backend().execute_train(
         train_args=shlex.join(argv),
+        train_script=train_script(argv),
         num_gpus_per_node=1,
         megatron_model_type=CONFIG["megatron_model_type"],
         megatron_path="/root/Megatron-LM",
